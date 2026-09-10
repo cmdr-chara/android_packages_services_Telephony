@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <!-- Enable only for the verified MTK slot-2 modem ABI on supported devices. -->
+    <bool name="config_mtk_euicc_slot_switch">false</bool>
+</resources>

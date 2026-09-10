@@ -35,6 +35,7 @@ import android.util.Log;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.euicc.EuiccConnector;
 import com.android.internal.telephony.util.TelephonyUtils;
+import com.android.phone.R;
 
 import java.util.HashSet;
 import java.util.List;
@@ -49,6 +50,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** Trampoline activity to forward eUICC intents from apps to the active UI implementation. */
 public class EuiccUiDispatcherActivity extends Activity {
     private static final String TAG = "EuiccUiDispatcher";
+    private static final String SETTINGS_PACKAGE = "com.android.settings";
+    private static final String ACTION_SHARED_SIM_SLOT_DIALOG =
+            "com.android.settings.action.SHARED_SIM_SLOT_DIALOG";
+    private static final String EXTRA_CONTINUATION =
+            "com.android.phone.euicc.extra.CONTINUATION";
+    private static final String EXTRA_SLOT_PREPARED =
+            "com.android.phone.euicc.extra.SLOT_PREPARED";
     private static final long CHANGE_PERMISSION_TIMEOUT_MS = 15 * 1000; // 15 seconds
 
     /** Flags to use when querying PackageManager for Euicc component implementations. */
@@ -80,6 +88,33 @@ public class EuiccUiDispatcherActivity extends Activity {
                 }
         );
         try {
+            // Let Settings use its native, translated SIM dialogs before the LUI.
+            boolean prepareSlot = getClass() == EuiccUiDispatcherActivity.class
+                    && getResources().getBoolean(R.bool.config_mtk_euicc_slot_switch)
+                    && (EuiccManager.ACTION_PROVISION_EMBEDDED_SUBSCRIPTION.equals(
+                            getIntent().getAction())
+                        || EuiccManager.ACTION_MANAGE_EMBEDDED_SUBSCRIPTIONS.equals(
+                            getIntent().getAction()))
+                    && !getIntent().getBooleanExtra(EXTRA_SLOT_PREPARED, false);
+            if (prepareSlot) {
+                Intent continuation = new Intent(getIntent());
+                continuation.setComponent(null);
+                continuation.setPackage(getPackageName());
+                continuation.removeExtra(EXTRA_SLOT_PREPARED);
+                Intent settingsIntent = new Intent(ACTION_SHARED_SIM_SLOT_DIALOG)
+                        .setPackage(SETTINGS_PACKAGE)
+                        .putExtra(EXTRA_CONTINUATION, continuation)
+                        .addFlags(Intent.FLAG_ACTIVITY_FORWARD_RESULT);
+                if (settingsIntent.resolveActivity(getPackageManager()) == null) {
+                    Log.e(TAG, "Shared SIM dialog is unavailable");
+                    setResult(RESULT_CANCELED);
+                    onDispatchFailure();
+                    return;
+                }
+                startActivityAsUser(settingsIntent, UserHandle.CURRENT);
+                return;
+            }
+
             Intent euiccUiIntent = resolveEuiccUiIntent();
             if (euiccUiIntent == null) {
                 setResult(RESULT_CANCELED);

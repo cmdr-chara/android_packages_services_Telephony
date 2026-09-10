@@ -1,0 +1,62 @@
+name: Shared SIM service contracts
+
+on:
+  push:
+    branches: [cmdr-chara/esim-android-ui-20260909]
+  pull_request:
+    branches: [lineage-23.2]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Reject whitespace errors
+        run: git diff --check HEAD^ HEAD
+      - name: Verify modem ABI and service trust boundaries
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          android = "{http://schemas.android.com/apk/res/android}"
+          manifest = ET.parse("AndroidManifest.xml").getroot()
+          service = next(
+              item for item in manifest.findall("./application/service")
+              if item.get(android + "name") == ".euicc.SharedSimSlotService"
+          )
+          assert service.get(android + "exported") == "true"
+          assert service.get(android + "permission") == "android.permission.MODIFY_PHONE_STATE"
+
+          resource = ET.parse("res/values/esim_slot.xml").getroot()
+          flag = next(item for item in resource.findall("bool")
+                      if item.get("name") == "config_mtk_euicc_slot_switch")
+          assert (flag.text or "").strip() == "false"
+
+          transport = Path("src/com/android/phone/euicc/MtkEsimTransport.java").read_text()
+          for contract in (
+              '"vendor.mediatek.hardware.mtkradioex.modem.IMtkRadioExModem"',
+              '"87512b9a1978fdb596a8d9176854d3761382dc82"',
+              'DESCRIPTOR + "/slot2"',
+              "private static final int VERSION = 2;",
+          ):
+              assert contract in transport, f"missing modem ABI contract: {contract}"
+
+          service_source = Path(
+              "src/com/android/phone/euicc/SharedSimSlotService.java"
+          ).read_text()
+          for boundary in (
+              "!isTrustedCaller(request.sendingUid)",
+              "checkSignatures(getPackageName(), SETTINGS_PACKAGE)",
+              "UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS",
+              "mayChange() && !isInCall()",
+          ):
+              assert boundary in service_source, f"missing service boundary: {boundary}"
+          PY
